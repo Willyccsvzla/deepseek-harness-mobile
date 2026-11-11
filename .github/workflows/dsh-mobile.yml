@@ -32,16 +32,21 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
+      # The runner already has an Android SDK. setup-android@v3's default
+      # package list still includes the retired `tools` package and fails with
+      # "Failed to find package 'tools'". Install only what we need.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Install Android platform 36
-        run: sdkmanager "platforms;android-36" "platform-tools"
+        run: sdkmanager "platforms;android-36"
 
       - name: Verify overlay assets
         working-directory: dsh-mobile
