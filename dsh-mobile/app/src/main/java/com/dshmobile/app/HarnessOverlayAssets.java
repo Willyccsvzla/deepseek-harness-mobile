@@ -51,10 +51,21 @@ final class HarnessOverlayAssets {
         if (children == null || children.length == 0) {
             byte[] content = read(context, assetPath);
             if (content == null) return false;
+            // AssetManager.list() 对文件返回空数组，此时 target 是文件路径。
+            // 嵌套目录（如 deepseek-ai-dsh-fs-local/lib/）不会被 list() 预先创建，
+            // 不先 mkdir 父目录时 Files.newOutputStream 会抛 NoSuchFileException，
+            // 整个覆盖层展开失败（见 Ajwyunsx/deepseek-harness-mobile#20）。
+            File parent = target.getParentFile();
+            if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+                throw new IOException("无法创建覆盖层目录: " + parent);
+            }
             try (OutputStream out = Files.newOutputStream(target.toPath())) {
                 out.write(content);
             }
             return true;
+        }
+        if (!target.isDirectory() && !target.mkdirs()) {
+            throw new IOException("无法创建覆盖层目录: " + target);
         }
         boolean copied = false;
         for (String child : children) {
