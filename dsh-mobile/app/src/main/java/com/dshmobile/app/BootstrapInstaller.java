@@ -134,7 +134,8 @@ public final class BootstrapInstaller {
      * 在容器内按指定规格安装 dsh。先用用户配置的 registry（默认 npmmirror），
      * 失败则改试 registry.npmjs.org。
      */
-    private void installDshFromNpm(String spec, int startPercent, int endPercent) throws IOException {
+    private void installDshFromNpm(String spec, int startPercent, int endPercent)
+            throws IOException, InterruptedException {
         String primary = prefs.getNpmRegistry();
         try {
             installDshFromRegistry(spec, primary, startPercent, endPercent);
@@ -150,7 +151,7 @@ public final class BootstrapInstaller {
     }
 
     private void installDshFromRegistry(String spec, String registry, int startPercent, int endPercent)
-            throws IOException {
+            throws IOException, InterruptedException {
         runInContainer(Arrays.asList("/opt/node/bin/npm", "config", "set", "registry", registry),
                 startPercent, startPercent);
         checkCancelled();
