@@ -1,0 +1,75 @@
+# Build the Android app in dsh-mobile/. Overlay assets are pre-generated and
+# committed (regenerating them needs the full monorepo `pnpm run build:lib:host`);
+# this workflow verifies they are present, then assembles the signed release APK.
+name: Build dsh-mobile APK
+
+on:
+  push:
+    branches: [master, fix/honor-install]
+    paths:
+      - 'dsh-mobile/**'
+      - '.github/workflows/dsh-mobile.yml'
+  pull_request:
+    paths:
+      - 'dsh-mobile/**'
+      - '.github/workflows/dsh-mobile.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dsh-mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Assemble release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform 36
+        run: sdkmanager "platforms;android-36" "platform-tools"
+
+      - name: Verify overlay assets
+        working-directory: dsh-mobile
+        run: |
+          set -euo pipefail
+          overlay=app/src/main/assets/harness-overlay
+          test -f "$overlay/harness-version.txt"
+          test -f "$overlay/manifest.tsv"
+          test -f "$overlay/deepseek-ai-dsh-fs-local/lib/index.js"
+          test -f "$overlay/deepseek-ai-dsh-fs-local/package.json"
+          echo "overlay harness version: $(tr -d '\n' < "$overlay/harness-version.txt")"
+          find "$overlay" -type f | sort
+
+      - name: Build release APK
+        working-directory: dsh-mobile
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Confirm overlay files inside the APK
+        run: |
+          set -euo pipefail
+          apk=dsh-mobile/app/build/outputs/apk/release/app-release.apk
+          unzip -l "$apk" | grep harness-overlay
+          unzip -l "$apk" | grep -q 'assets/harness-overlay/deepseek-ai-dsh-fs-local/lib/index.js'
+          unzip -l "$apk" | grep -q 'assets/harness-overlay/harness-version.txt'
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-mobile-release
+          path: dsh-mobile/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
