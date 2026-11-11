@@ -342,6 +342,17 @@ public final class BootstrapInstaller {
             stage("配置容器", 72);
             writeContainerConfig(rootfs);
 
+            // 4a. 把上次因宿主 TMPDIR 泄漏而卡在 unpacked/unconfigured 的包
+            // （典型是 ca-certificates 的 mktemp）用正确的 /tmp 配完。
+            // 无论 g++ 是否已经在磁盘上，都要跑：半配置的 ca-certificates
+            // 不会阻止 /usr/bin/g++ 这个文件存在，若只在“缺 g++”时修复会漏掉。
+            try {
+                recoverPendingDpkg(73);
+            } catch (Exception e) {
+                if (cancelled) throw e;
+                log("⚠ dpkg --configure -a 恢复失败: " + e.getMessage());
+            }
+
             // 4b. 编译工具链（dsh 依赖的 node-pty 需要 python3/make/g++ 现场编译）
             File gxx = new File(rootfs, "usr/bin/g++");
             if (!gxx.isFile()) {
@@ -588,6 +599,44 @@ public final class BootstrapInstaller {
         int code = p.waitFor();
         if (code != 0) {
             throw new IOException("容器命令失败(" + code + "): " + inner);
+        }
+    }
+
+    /**
+     * 完成上次留下的 unpacked/unconfigured 包（Honor 上常见：ca-certificates
+     * 的 postinst 用了宿主 cacheDir 当 TMPDIR，mktemp 失败）。
+     * 无待配置包时几乎立即返回 0。
+     */
+    private void recoverPendingDpkg(int percent) throws IOException, InterruptedException {
+        killStaleAptProcesses();
+        runInContainer(Arrays.asList("/usr/bin/dpkg", "--configure", "-a"), percent, percent);
+        log("dpkg --configure -a 完成");
+    }
+
+    /**
+     * 服务启动时的同名恢复：已装完、但容器里还留着半配置包的情况。
+     * 失败只写日志，不阻挡 Web 服务。
+     */
+    public static void recoverPendingDpkg(Context ctx, File logFile) {
+        BootstrapInstaller installer = new BootstrapInstaller(ctx, new Listener() {
+            @Override
+            public void onStage(String stage, int percent) {
+                appendLog(logFile, "[dpkg] " + stage);
+            }
+
+            @Override
+            public void onLog(String line) {
+                appendLog(logFile, "[dpkg] " + line);
+            }
+
+            @Override
+            public void onDone(boolean success, String error) {
+            }
+        });
+        try {
+            installer.recoverPendingDpkg(0);
+        } catch (Exception e) {
+            appendLog(logFile, "[dpkg] --configure -a 失败（继续启动）: " + e);
         }
     }
 

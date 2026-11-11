@@ -43,6 +43,8 @@ public class HarnessService extends Service {
     private volatile boolean wantRun;
     /** 本服务进程是否还没尝试过把容器内 dsh 对齐到补丁包目标版本。 */
     private boolean alignAttempted = true;
+    /** 本服务进程是否已经跑过一次 dpkg --configure -a 恢复。 */
+    private boolean dpkgRecoveryAttempted;
 
     public static boolean isRunning() {
         return running && process != null && process.isAlive();
@@ -102,6 +104,13 @@ public class HarnessService extends Service {
         int restarts = 0;
         while (wantRun) {
             File log = new File(ProotRunner.baseDir(this), "dsh-web.log");
+            // 上次安装可能留下 unpacked 的 ca-certificates（宿主 TMPDIR 泄漏）。
+            // 先用容器内 /tmp 把 dpkg 配完，再编译 node-pty。
+            if (!dpkgRecoveryAttempted) {
+                dpkgRecoveryAttempted = true;
+                updateNotification("正在恢复未配置完的软件包…");
+                BootstrapInstaller.recoverPendingDpkg(this, log);
+            }
             // 启动前自检 node-pty：pty.node 缺失时 dsh web 必崩（plugin tree
             // failed to load），先就地修复再启动，避免无意义的崩溃-重启循环
             if (NodePtyFixer.needsFix(ProotRunner.rootfsDir(this))) {

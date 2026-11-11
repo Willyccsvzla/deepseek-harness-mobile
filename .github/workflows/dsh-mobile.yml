@@ -5,7 +5,7 @@ name: Build dsh-mobile APK
 
 on:
   push:
-    branches: [master, fix/honor-install]
+    branches: [master, 'fix/**']
     paths:
       - 'dsh-mobile/**'
       - '.github/workflows/dsh-mobile.yml'
