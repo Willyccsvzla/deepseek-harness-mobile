@@ -48,6 +48,13 @@ public final class BootstrapInstaller {
     private static final String NODE_SERIES = "latest-v22.x";
     private static final int CONNECT_TIMEOUT = 15000;
     private static final int READ_TIMEOUT = 60000;
+    /**
+     * 与 assets/harness-overlay/harness-version.txt 保持一致。覆盖层展开失败、
+     * 读不到版本文件时用它，避免 npm 把无版本的 {@code @deepseek-ai/dsh} 解析成
+     * {@code *}（registry 上只有 pre-release 时会 ETARGET）。
+     */
+    static final String FALLBACK_DSH_VERSION = "0.2.1-rc.3";
+    static final String PUBLIC_NPM_REGISTRY = "https://registry.npmjs.org";
 
     private final Context ctx;
     private final Prefs prefs;
@@ -91,6 +98,74 @@ public final class BootstrapInstaller {
             log("⚠ harness 覆盖层资产展开失败（本次不做覆盖）: " + e);
             return destination;
         }
+    }
+
+    /**
+     * 解析要安装的 dsh 版本：已展开的覆盖层 → APK 资产里的声明 → 编译期固定版本。
+     * 绝不返回 null，这样安装规格始终带明确版本或 {@code @latest}，不会退化成 {@code *}。
+     */
+    private String resolveDshVersion(File overlayDir) {
+        String fromOverlay = HarnessOverlay.targetVersion(overlayDir);
+        if (fromOverlay != null) return fromOverlay;
+        try (InputStream in = ctx.getAssets().open("harness-overlay/harness-version.txt")) {
+            byte[] buf = new byte[64];
+            int n = in.read(buf);
+            if (n > 0) {
+                String version = new String(buf, 0, n, StandardCharsets.UTF_8).trim();
+                if (!version.isEmpty()) {
+                    log("覆盖层未展开完整，改用 APK 内声明的 dsh 版本 " + version);
+                    return version;
+                }
+            }
+        } catch (IOException ignored) {
+            // 资产缺失时退回编译期固定版本
+        }
+        log("覆盖层未声明版本，改用内置固定版本 " + FALLBACK_DSH_VERSION);
+        return FALLBACK_DSH_VERSION;
+    }
+
+    /** 生成 npm 安装规格；版本为空时显式使用 latest 标签，不用无版本包名。 */
+    static String dshInstallSpec(String version) {
+        if (version == null || version.isEmpty()) return "@deepseek-ai/dsh@latest";
+        return "@deepseek-ai/dsh@" + version;
+    }
+
+    /**
+     * 在容器内按指定规格安装 dsh。先用用户配置的 registry（默认 npmmirror），
+     * 失败则改试 registry.npmjs.org。
+     */
+    private void installDshFromNpm(String spec, int startPercent, int endPercent)
+            throws IOException, InterruptedException {
+        String primary = prefs.getNpmRegistry();
+        try {
+            installDshFromRegistry(spec, primary, startPercent, endPercent);
+        } catch (IOException e) {
+            if (cancelled) throw e;
+            String fallback = PUBLIC_NPM_REGISTRY;
+            if (normalizeRegistry(primary).equals(normalizeRegistry(fallback))) {
+                throw e;
+            }
+            log("npm 安装失败（" + primary + "）: " + e.getMessage() + "，改试 " + fallback);
+            installDshFromRegistry(spec, fallback, startPercent, endPercent);
+        }
+    }
+
+    private void installDshFromRegistry(String spec, String registry, int startPercent, int endPercent)
+            throws IOException, InterruptedException {
+        runInContainer(Arrays.asList("/opt/node/bin/npm", "config", "set", "registry", registry),
+                startPercent, startPercent);
+        checkCancelled();
+        runInContainer(Arrays.asList("/opt/node/bin/npm", "install", "-g", "--registry", registry, spec),
+                startPercent, endPercent);
+    }
+
+    private static String normalizeRegistry(String url) {
+        if (url == null) return "";
+        String trimmed = url.trim();
+        while (trimmed.endsWith("/")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        return trimmed;
     }
 
     /**
@@ -144,10 +219,7 @@ public final class BootstrapInstaller {
             }
         });
         try {
-            installer.runInContainer(Arrays.asList("/opt/node/bin/npm", "config", "set", "registry",
-                    installer.prefs.getNpmRegistry()), 0, 0);
-            installer.runInContainer(Arrays.asList("/opt/node/bin/npm", "install", "-g",
-                    "@deepseek-ai/dsh@" + targetVersion), 0, 0);
+            installer.installDshFromNpm("@deepseek-ai/dsh@" + targetVersion, 0, 0);
         } catch (Exception e) {
             appendLog(logFile, "[harness] 对齐失败（继续用容器内现有版本）: " + e);
             return false;
@@ -311,8 +383,9 @@ public final class BootstrapInstaller {
             // 同一版本的包做过校验，所以这里宁可显式装成那个版本，也不跟着 npm
             // 的 latest 漂——版本不一致时覆盖会被整包跳过。
             File overlayDir = extractHarnessOverlay();
-            String targetVersion = HarnessOverlay.targetVersion(overlayDir);
-            String spec = targetVersion == null ? "@deepseek-ai/dsh" : "@deepseek-ai/dsh@" + targetVersion;
+            String targetVersion = resolveDshVersion(overlayDir);
+            String spec = dshInstallSpec(targetVersion);
+            log("dsh 安装规格: " + spec);
             File dshBin = new File(rootfs, "opt/node/bin/dsh");
             String installedVersion = HarnessOverlay.installedHarnessVersion(rootfs);
             if (!dshBin.isFile() || (targetVersion != null && !targetVersion.equals(installedVersion))) {
@@ -333,10 +406,7 @@ public final class BootstrapInstaller {
                         }
                     }
                 }
-                runInContainer(Arrays.asList("/opt/node/bin/npm", "config", "set", "registry",
-                        prefs.getNpmRegistry()), 83, 85);
-                checkCancelled();
-                runInContainer(Arrays.asList("/opt/node/bin/npm", "install", "-g", spec), 85, 96);
+                installDshFromNpm(spec, 83, 96);
             } else {
                 log("dsh 已安装且版本一致（" + installedVersion + "），跳过");
             }
