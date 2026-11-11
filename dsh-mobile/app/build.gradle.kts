@@ -16,8 +16,8 @@ android {
         // （POST_NOTIFICATIONS / MANAGE_EXTERNAL_STORAGE / 前台服务声明），
         // 16KB 页设备在安装期由 BootstrapInstaller 检测并告警。
         targetSdk = 28
-        versionCode = 44
-        versionName = "1.0.42-willy1"
+        versionCode = 45
+        versionName = "1.0.43-willy1"
     }
 
     lint {
