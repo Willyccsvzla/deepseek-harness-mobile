@@ -122,6 +122,21 @@ public final class ProotRunner {
         cmd.add("/usr/bin/env");
         cmd.add("-u");
         cmd.add("LD_LIBRARY_PATH");
+        // Android 给应用进程设置 TMPDIR=cacheDir（/data/user/0/<pkg>/cache）。
+        // ProcessBuilder 会把它传进 proot，env 默认再转给容器进程。容器根是
+        // rootfs，cacheDir 那条宿主路径并不存在（我们把 bootstrap/tmp 绑到
+        // /tmp，见上面的 -b）。mktemp/dpkg 的 ca-certificates 配置脚本就会
+        // 在 /data/user/0/.../cache/ca-certificates.tmp.XXXXXX 上报
+        // No such file or directory。清掉宿主的 TMP/TEMP/TMPDIR，改用 /tmp。
+        cmd.add("-u");
+        cmd.add("TMPDIR");
+        cmd.add("-u");
+        cmd.add("TMP");
+        cmd.add("-u");
+        cmd.add("TEMP");
+        cmd.add("TMPDIR=/tmp");
+        cmd.add("TMP=/tmp");
+        cmd.add("TEMP=/tmp");
         cmd.add("PATH=/opt/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
         cmd.add("HOME=/home/dsh");
         cmd.add("TERM=xterm-256color");
